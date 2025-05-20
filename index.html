@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>ホヨバギフトコード置換</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
+  <style>
+    .tab-content { display: none; }
+    .tab-active { display: block; }
+    .toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background-color: #333;
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 8px;
+      z-index: 9999;
+      opacity: 0.9;
+      animation: fadeout 3s forwards;
+    }
+    @keyframes fadeout {
+      0%, 90% { opacity: 0.9; }
+      100% { opacity: 0; display: none; }
+    }
+  </style>
+</head>
+<body class="bg-gray-900 text-gray-100 transition-colors duration-300">
+  <div class="max-w-4xl mx-auto mt-10 p-6 bg-gray-800 rounded-xl shadow-md">
+    <!-- タブナビ -->
+    <div class="mb-6">
+      <div class="flex space-x-4 border-b pb-2">
+        <button class="tab-btn px-4 py-2 border-b-2 border-transparent hover:border-blue-500" onclick="switchTab('converter')">変換ツール</button>
+        <button class="tab-btn px-4 py-2 border-b-2 border-transparent hover:border-blue-500" onclick="switchTab('webhooks')">Webhook管理</button>
+        <button class="tab-btn px-4 py-2 border-b-2 border-transparent hover:border-blue-500" onclick="switchTab('log')">送信ログ</button>
+      </div>
+    </div>
+
+    <!-- タブ：変換ツール -->
+    <div id="converter" class="tab-content tab-active">
+      <h2 class="text-xl font-bold mb-4">🎮 ホヨバ系シリアルコード変換ツール</h2>
+      <input id="inputText" class="w-full p-2 border rounded border-gray-600 bg-gray-700 text-gray-100" placeholder="例：ZZZFREE100" />
+      <select id="baseUrlSelect" class="w-full p-2 border rounded border-gray-600 bg-gray-700 text-gray-100 my-2">
+        <option value="https://zenless.hoyoverse.com/redemption/gift?code=">ゼンレスゾーンゼロ</option>
+        <option value="https://genshin.hoyoverse.com/ja/gift?code=">原神</option>
+        <option value="https://hsr.hoyoverse.com/gift?code=">崩壊スターレール</option>
+        <option value="custom">カスタム</option>
+      </select>
+      <input id="customBaseUrl" class="w-full p-2 border rounded border-gray-600 bg-gray-700 text-gray-100 mb-2 hidden" placeholder="カスタムURLを入力してください" />
+      <div class="flex space-x-2 my-3">
+        <button class="bg-blue-500 text-white px-4 py-2 rounded" onclick="convertText()">変換</button>
+        <button class="bg-gray-500 text-white px-4 py-2 rounded" onclick="copyText()">コピー</button>
+        <button class="bg-green-500 text-white px-4 py-2 rounded" onclick="previewSend()">送信プレビュー</button>
+        <button class="bg-purple-500 text-white px-4 py-2 rounded" onclick="sendToDiscord()">Discordに送信</button>
+      </div>
+      <div id="outputText" class="bg-gray-700 p-3 rounded mb-2 text-gray-100">ここに変換結果が表示されます</div>
+      <div class="text-blue-400" id="outputLink"></div>
+    </div>
+
+    <!-- タブ：Webhook管理 -->
+    <div id="webhooks" class="tab-content">
+      <h2 class="text-xl font-bold mb-4">🔧 Webhook管理</h2>
+      <div class="flex space-x-2 mb-2">
+        <input id="webhookName" class="flex-1 p-2 border rounded border-gray-600 bg-gray-700 text-gray-100" placeholder="Webhook名" />
+        <input id="webhookUrl" class="flex-1 p-2 border rounded border-gray-600 bg-gray-700 text-gray-100" placeholder="Webhook URL" />
+        <button class="bg-blue-500 text-white px-4 py-2 rounded" onclick="addWebhook()">追加</button>
+      </div>
+      <div class="flex space-x-2 mb-4">
+        <button class="bg-yellow-500 text-white px-3 py-1 rounded" onclick="exportWebhooks()">エクスポート</button>
+        <input type="file" id="importFile" class="hidden" onchange="importWebhooks(event)" />
+        <button class="bg-indigo-500 text-white px-3 py-1 rounded" onclick="document.getElementById('importFile').click()">インポート</button>
+        <button class="bg-gray-500 text-white px-3 py-1 rounded" onclick="toggleAllWebhooks(false)">全てOFF</button>
+        <button class="bg-green-600 text-white px-3 py-1 rounded" onclick="toggleAllWebhooks(true)">全てON</button>
+      </div>
+      <div id="webhookList" class="space-y-2"></div>
+    </div>
+
+    <!-- タブ：送信ログ -->
+    <div id="log" class="tab-content">
+      <h2 class="text-xl font-bold mb-4">📋 送信ログ</h2>
+      <div id="logArea" class="bg-gray-700 p-3 rounded h-64 overflow-y-auto text-sm space-y-1"></div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script>
+    let webhooks = [];
+
+    document.getElementById("inputText").addEventListener("input", function () {
+      this.value = this.value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+    });
+
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('tab-active'));
+      document.getElementById(tab).classList.add('tab-active');
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('border-blue-500', 'text-white');
+      });
+      document.querySelector(`.tab-btn[onclick="switchTab('${tab}')"]`).classList.add('border-blue-500', 'text-white');
+    }
+
+    function showToast(msg) {
+      const t = document.createElement("div");
+      t.className = "toast";
+      t.innerText = msg;
+      document.getElementById("toast").appendChild(t);
+      setTimeout(() => t.remove(), 3000);
+    }
+
+    function appendLog(message, success = true) {
+      const log = document.getElementById("logArea");
+      const timestamp = new Date().toLocaleString();
+      const entry = document.createElement("div");
+      entry.className = success ? "text-green-400" : "text-red-400";
+      entry.innerText = `[${timestamp}] ${message}`;
+      log.appendChild(entry);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function sendToDiscord() {
+      const content = document.getElementById("outputText").innerText;
+      if (!content || content === "ここに変換結果が表示されます") return showToast("まず変換してください");
+      const targets = webhooks.filter(w => w.enabled);
+      if (targets.length === 0) return showToast("送信対象がありません");
+      targets.forEach(({ name, url }) => {
+        fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content })
+        })
+          .then(r => appendLog(`${name} に送信 ${r.ok ? "成功" : "失敗"}`, r.ok))
+          .catch(e => appendLog(`${name} エラー: ${e.message}`, false));
+      });
+    }
+
+    function convertText() {
+      const input = document.getElementById("inputText").value.trim();
+      const base = document.getElementById("baseUrlSelect").value;
+      const custom = document.getElementById("customBaseUrl").value.trim();
+      const baseUrl = base === 'custom' ? custom : base;
+      if (!input || !baseUrl) return showToast("入力またはURLが空です");
+      const link = `${baseUrl}${encodeURIComponent(input)}`;
+      const markdown = `# [${input}](${link})`;
+      document.getElementById("outputText").innerText = markdown;
+      document.getElementById("outputLink").innerHTML = `<a href="${link}" target="_blank" class="underline text-blue-400">${link}</a>`;
+    }
+
+    function copyText() {
+      const text = document.getElementById("outputText").innerText;
+      if (!text) return showToast("コピーする内容がありません");
+      navigator.clipboard.writeText(text).then(() => showToast("コピーしました"));
+    }
+
+    function previewSend() {
+      const content = document.getElementById("outputText").innerText;
+      if (!content) return showToast("まず変換してください");
+      showToast("送信内容プレビュー:\n" + content);
+    }
+
+    function addWebhook() {
+      const name = document.getElementById("webhookName").value.trim();
+      const url = document.getElementById("webhookUrl").value.trim();
+      if (!name || !/^https:\/\/.+/.test(url)) return showToast("名前と有効なURLを入力してください。");
+      webhooks.push({ name, url, enabled: true });
+      saveWebhooks();
+      document.getElementById("webhookName").value = "";
+      document.getElementById("webhookUrl").value = "";
+    }
+
+    function renderWebhookList() {
+      const list = document.getElementById("webhookList");
+      list.innerHTML = "";
+      webhooks.forEach((hook, index) => {
+        const div = document.createElement("div");
+        div.className = "flex items-center space-x-2";
+        div.innerHTML = `
+          <input class="flex-1 p-1 border rounded border-gray-600 bg-gray-700 text-gray-100" value="${hook.name}" onchange="editWebhookName(${index}, this.value)">
+          <input class="flex-1 p-1 border rounded border-gray-600 bg-gray-700 text-gray-100" value="${hook.url}" onchange="editWebhookUrl(${index}, this.value)">
+          <input type="checkbox" ${hook.enabled ? "checked" : ""} onchange="toggleWebhook(${index}, this.checked)">
+          <button class="bg-red-500 text-white px-2 py-1 rounded" onclick="removeWebhook(${index})">削除</button>
+        `;
+        list.appendChild(div);
+      });
+    }
+
+    function editWebhookName(i, val) { webhooks[i].name = val; saveWebhooks(); }
+    function editWebhookUrl(i, val) { webhooks[i].url = val; saveWebhooks(); }
+    function toggleWebhook(i, val) { webhooks[i].enabled = val; saveWebhooks(); }
+    function removeWebhook(i) { webhooks.splice(i, 1); saveWebhooks(); }
+    function toggleAllWebhooks(state) { webhooks.forEach(w => w.enabled = state); saveWebhooks(); }
+
+    function saveWebhooks() {
+      localStorage.setItem("webhookList", JSON.stringify(webhooks));
+      renderWebhookList();
+    }
+
+    function loadWebhooks() {
+      const saved = localStorage.getItem("webhookList");
+      if (saved) webhooks = JSON.parse(saved);
+      renderWebhookList();
+    }
+
+    function exportWebhooks() {
+      const blob = new Blob([JSON.stringify(webhooks)], { type: "application/json" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "webhooks.json";
+      link.click();
+    }
+
+    function importWebhooks(e) {
+      const reader = new FileReader();
+      reader.onload = function (event) {
+        try {
+          const imported = JSON.parse(event.target.result);
+          if (Array.isArray(imported)) {
+            webhooks = imported;
+            saveWebhooks();
+            showToast("インポート成功");
+          } else {
+            showToast("不正なファイル形式");
+          }
+        } catch {
+          showToast("読み込み失敗");
+        }
+      };
+      reader.readAsText(e.target.files[0]);
+    }
+
+    document.getElementById('baseUrlSelect').addEventListener('change', function () {
+      const customInput = document.getElementById('customBaseUrl');
+      if (this.value === 'custom') {
+        customInput.classList.remove('hidden');
+        customInput.removeAttribute('readonly');
+        customInput.value = '';
+      } else {
+        customInput.classList.add('hidden');
+        customInput.setAttribute('readonly', true);
+        customInput.value = this.value;
+      }
+    });
+
+    loadWebhooks();
+  </script>
+</body>
+</html>
